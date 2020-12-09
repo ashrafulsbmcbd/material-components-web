@@ -44,6 +44,10 @@ enum AnimationKeys {
   POLL_ANCHOR = 'poll_anchor'
 }
 
+// The max width of a tooltip, obtained from taking greater of the max-width
+// between the rich and the plain tooltip in _tooltip.scss.
+const MAX_TOOLTIP_WIDTH = '320px';
+
 export class MDCTooltipFoundation extends MDCFoundation<MDCTooltipAdapter> {
   static get defaultAdapter(): MDCTooltipAdapter {
     return {
@@ -409,6 +413,10 @@ export class MDCTooltipFoundation extends MDCFoundation<MDCTooltipAdapter> {
   }
 
   private positionTooltip() {
+    // Moves the tooltip out of the viewport/parent element so that the
+    // initial width is not affected and a 'correct' width can be used to
+    // calculate the position of the tooltip.
+    this.adapter.setStyleProperty('left', MAX_TOOLTIP_WIDTH);
     const {top, left} = this.calculateTooltipDistance(this.anchorRect);
     this.adapter.setStyleProperty('top', `${top}px`);
     this.adapter.setStyleProperty('left', `${left}px`);
@@ -444,17 +452,27 @@ export class MDCTooltipFoundation extends MDCFoundation<MDCTooltipAdapter> {
    */
   private calculateXTooltipDistance(
       anchorRect: ClientRect, tooltipWidth: number) {
-    let startPos = anchorRect.left;
-    let endPos = anchorRect.right - tooltipWidth;
-    const centerPos = anchorRect.left + (anchorRect.width - tooltipWidth) / 2;
-
-    if (this.adapter.isRTL()) {
-      startPos = anchorRect.right - tooltipWidth;
-      endPos = anchorRect.left;
+    const isLTR = !this.adapter.isRTL();
+    let startPos, endPos, centerPos: number|undefined;
+    if (this.isRich) {
+      startPos = isLTR ? anchorRect.left - tooltipWidth : anchorRect.right;
+      endPos = isLTR ? anchorRect.right : anchorRect.left - tooltipWidth;
+    } else {
+      startPos = isLTR ? anchorRect.left : anchorRect.right - tooltipWidth;
+      endPos = isLTR ? anchorRect.right - tooltipWidth : anchorRect.left;
+      centerPos = anchorRect.left + (anchorRect.width - tooltipWidth) / 2;
     }
 
-    const positionOptions =
-        this.determineValidPositionOptions(centerPos, startPos, endPos);
+    if (this.adapter.isRTL()) {
+      startPos =
+          this.isRich ? anchorRect.right : anchorRect.right - tooltipWidth;
+      endPos = this.isRich ? anchorRect.left - tooltipWidth : anchorRect.left;
+    }
+
+    const positionOptions = this.isRich ?
+        this.determineValidPositionOptions(startPos, endPos) :
+        // For non-rich tooltips, centerPos is defined
+        this.determineValidPositionOptions(centerPos!, startPos, endPos);
 
     if (this.xTooltipPos === XPosition.START && positionOptions.has(startPos)) {
       return startPos;
@@ -467,14 +485,15 @@ export class MDCTooltipFoundation extends MDCFoundation<MDCTooltipAdapter> {
       return centerPos;
     }
 
-    if (positionOptions.has(centerPos)) {
-      return centerPos;
-    }
-    if (positionOptions.has(startPos)) {
-      return startPos;
-    }
-    if (positionOptions.has(endPos)) {
-      return endPos;
+    // Rich tooltips default to end pos first while plain tooltips default to
+    // center, start, then end.
+    const possiblePositions =
+        this.isRich ? [endPos, startPos] : [centerPos, startPos, endPos];
+
+    const validPostion =
+        possiblePositions.find(pos => positionOptions.has(pos));
+    if (validPostion) {
+      return validPostion;
     }
 
     // Indicates that all potential positions would result in the tooltip
@@ -491,38 +510,27 @@ export class MDCTooltipFoundation extends MDCFoundation<MDCTooltipAdapter> {
   }
 
   /**
-   * Given the values for center/start/end alignment of the tooltip, calculates
+   * Given the values for the horizontal alignments of the tooltip, calculates
    * which of these options would result in the tooltip maintaining the required
    * threshold distance vs which would result in the tooltip staying within the
    * viewport.
    *
    * A Set of values is returned holding the distances that would honor the
    * above requirements. Following the logic for determining the tooltip
-   * position, if all three alignments violate the threshold, then the returned
-   * Set contains values that keep the tooltip within the viewport.
+   * position, if all alignments violate the threshold, then the returned Set
+   * contains values that keep the tooltip within the viewport.
    */
-  private determineValidPositionOptions(
-      centerPos: number, startPos: number, endPos: number) {
+  private determineValidPositionOptions(...positions: number[]) {
     const posWithinThreshold = new Set();
     const posWithinViewport = new Set();
 
-    if (this.positionHonorsViewportThreshold(centerPos)) {
-      posWithinThreshold.add(centerPos);
-    } else if (this.positionDoesntCollideWithViewport(centerPos)) {
-      posWithinViewport.add(centerPos);
-    }
-
-    if (this.positionHonorsViewportThreshold(startPos)) {
-      posWithinThreshold.add(startPos);
-    } else if (this.positionDoesntCollideWithViewport(startPos)) {
-      posWithinViewport.add(startPos);
-    }
-
-    if (this.positionHonorsViewportThreshold(endPos)) {
-      posWithinThreshold.add(endPos);
-    } else if (this.positionDoesntCollideWithViewport(endPos)) {
-      posWithinViewport.add(endPos);
-    }
+    positions.forEach((position) => {
+      if (this.positionHonorsViewportThreshold(position)) {
+        posWithinThreshold.add(position);
+      } else if (this.positionDoesntCollideWithViewport(position)) {
+        posWithinViewport.add(position);
+      }
+    });
 
     return posWithinThreshold.size ? posWithinThreshold : posWithinViewport;
   }
